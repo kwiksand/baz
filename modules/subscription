@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+
+# subscription module for baz
+
+function subscription_list() {
+  # List all subscriptions with their details
+  az account list --query "[].{name:name, id:subscriptionId, state:state, is_default:isDefault}" -o json |
+    jq -r '.[] | "\(.name) \(.id) \(.state) \(.is_default)"' |
+    while read -r name id state is_default; do
+      # Mark default subscription
+      default_mark=""
+      if [ "$is_default" = "true" ]; then
+        default_mark="*"
+      fi
+
+      # Format output
+      printf "%-1s %-40s %-40s %-10s\n" "$default_mark" "$name" "$id" "$state"
+    done |
+    (
+      # Print header
+      echo "----------------------------------------------------------------------------------------"
+      printf "%-1s %-40s %-40s %-10s\n" "" "name" "subscription_id" "state"
+      # Print data
+      cat
+      echo "----------------------------------------------------------------------------------------"
+      echo "* = current default subscription"
+    )
+}
+
+function subscription_show() {
+  # Show current subscription details
+  az account show --query "{name:name, id:subscriptionId, state:state, tenant_id:tenantId}" -o json |
+    jq -r '"\(.name)\n\(.id)\n\(.state)\n\(.tenant_id)"' |
+    (
+      read -r name
+      read -r id
+      read -r state
+      read -r tenant_id
+      echo "Current Subscription:"
+      echo "  Name:        $name"
+      echo "  ID:          $id"
+      echo "  State:       $state"
+      echo "  Tenant ID:   $tenant_id"
+    )
+}
+
+function subscription_set() {
+  local subscription_id="$1"
+
+  if [ -z "$subscription_id" ]; then
+    echo "Error: Subscription ID or name required"
+    echo "Usage: baz subscription set <subscription-id-or-name>"
+    return 1
+  fi
+
+  # Try to set the subscription
+  if az account set --subscription "$subscription_id" 2>/dev/null; then
+    echo "Subscription set to: $subscription_id"
+    subscription_show
+  else
+    echo "Error: Failed to set subscription to '$subscription_id'"
+    echo "Use 'baz subscription list' to see available subscriptions"
+    return 1
+  fi
+}
+
+function subscription_usage() {
+  echo "Usage: baz subscription <command>"
+  echo ""
+  echo "Commands:"
+  echo "  list          List all subscriptions"
+  echo "  show          Show current subscription details"
+  echo "  set <id>      Set active subscription by ID or name"
+}
+
+function subscription_main() {
+  local subcommand="$1"
+  shift
+
+  case "$subcommand" in
+    list)
+      subscription_list "$@"
+      ;;
+    show)
+      subscription_show "$@"
+      ;;
+    set)
+      subscription_set "$@"
+      ;;
+    *)
+      subscription_usage
+      return 1
+      ;;
+  esac
+}

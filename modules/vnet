@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+# vnet module for baz
+
+function vnet_list() {
+  # Get all resource groups and their vnets
+  az network vnet list --query "[].{resource_group:resourceGroup, vnet_name:name, cidr_range:addressSpace.addressPrefixes[0], peerings:length(virtualNetworkPeerings)}" -o json |
+    jq -r '.[] | "\(.resource_group) \(.vnet_name) \(.cidr_range) \(.peerings)"' |
+    while read -r rg vnet cidr peer_count; do
+      # Convert peer count to yes/no
+      peer_status="no"
+      if [ "$peer_count" -gt 0 ]; then
+        peer_status="yes"
+      fi
+
+      # Store in array for formatting
+      printf "%-20s %-20s %-20s %-5s\n" "$rg" "$vnet" "$cidr" "$peer_status"
+    done |
+    (
+      # Print header
+      echo "---------------------------------------------------"
+      printf "%-20s %-20s %-20s %-5s\n" "resource_group" "vnet_name" "cidr_range" "peer_connected"
+      # Print data
+      cat
+      echo "---------------------------------------------------"
+    )
+}
+
+function vnet_usage() {
+  echo "Usage: baz vnet <command>"
+  echo ""
+  echo "Commands:"
+  echo "  list    List all virtual networks"
+}
+
+function vnet_main() {
+  local subcommand="$1"
+  shift
+
+  case "$subcommand" in
+    list)
+      vnet_list "$@"
+      ;;
+    *)
+      vnet_usage
+      return 1
+      ;;
+  esac
+}

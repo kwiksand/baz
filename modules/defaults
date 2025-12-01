@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+
+# defaults module for baz
+
+function defaults_list() {
+  echo "Current Defaults:"
+  echo ""
+
+  # Get default resource group
+  local default_rg=$(az config get defaults.group --query "value" -o tsv 2>/dev/null)
+  if [ -z "$default_rg" ] || [ "$default_rg" = "null" ]; then
+    default_rg="(not set)"
+  fi
+  echo "  Resource Group: $default_rg"
+
+  # Get default location/region
+  local default_location=$(az config get defaults.location --query "value" -o tsv 2>/dev/null)
+  if [ -z "$default_location" ] || [ "$default_location" = "null" ]; then
+    default_location="(not set)"
+  fi
+  echo "  Location:       $default_location"
+}
+
+function defaults_set_group() {
+  local resource_group="$1"
+
+  if [ -z "$resource_group" ]; then
+    echo "Error: Resource group name required"
+    echo "Usage: baz defaults set-group <resource-group-name>"
+    return 1
+  fi
+
+  # Verify resource group exists
+  if ! az group show --name "$resource_group" &>/dev/null; then
+    echo "Error: Resource group '$resource_group' not found"
+    echo "Use 'az group list -o table' to see available resource groups"
+    return 1
+  fi
+
+  # Set default resource group
+  if az config set defaults.group="$resource_group" 2>/dev/null; then
+    echo "Default resource group set to: $resource_group"
+  else
+    echo "Error: Failed to set default resource group"
+    return 1
+  fi
+}
+
+function defaults_set_location() {
+  local location="$1"
+
+  if [ -z "$location" ]; then
+    echo "Error: Location name required"
+    echo "Usage: baz defaults set-location <location-name>"
+    echo "Example: baz defaults set-location eastus"
+    return 1
+  fi
+
+  # Verify location exists
+  if ! az account list-locations --query "[?name=='$location'].name" -o tsv 2>/dev/null | grep -q "$location"; then
+    echo "Error: Location '$location' not found"
+    echo "Use 'az account list-locations -o table' to see available locations"
+    return 1
+  fi
+
+  # Set default location
+  if az config set defaults.location="$location" 2>/dev/null; then
+    echo "Default location set to: $location"
+  else
+    echo "Error: Failed to set default location"
+    return 1
+  fi
+}
+
+function defaults_unset_group() {
+  if az config unset defaults.group 2>/dev/null; then
+    echo "Default resource group unset"
+  else
+    echo "Error: Failed to unset default resource group"
+    return 1
+  fi
+}
+
+function defaults_unset_location() {
+  if az config unset defaults.location 2>/dev/null; then
+    echo "Default location unset"
+  else
+    echo "Error: Failed to unset default location"
+    return 1
+  fi
+}
+
+function defaults_usage() {
+  echo "Usage: baz defaults <command>"
+  echo ""
+  echo "Commands:"
+  echo "  list              List current default settings"
+  echo "  set-group <name>  Set default resource group"
+  echo "  set-location <loc>  Set default location/region"
+  echo "  unset-group       Unset default resource group"
+  echo "  unset-location    Unset default location"
+}
+
+function defaults_main() {
+  local subcommand="$1"
+  shift
+
+  case "$subcommand" in
+    list)
+      defaults_list "$@"
+      ;;
+    set-group)
+      defaults_set_group "$@"
+      ;;
+    set-location)
+      defaults_set_location "$@"
+      ;;
+    unset-group)
+      defaults_unset_group "$@"
+      ;;
+    unset-location)
+      defaults_unset_location "$@"
+      ;;
+    *)
+      defaults_usage
+      return 1
+      ;;
+  esac
+}

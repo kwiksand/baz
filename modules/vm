@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+
+# vm module for baz
+
+function vm_list() {
+  # Get all VMs with their network interface details
+  az vm list --show-details --query "[].{resource_group:resourceGroup, vm_name:name, private_ip:privateIps, power_state:powerState}" -o json |
+    jq -r '.[] | "\(.resource_group) \(.vm_name) \(.private_ip // "N/A") \(.power_state // "Unknown")"' |
+    while read -r rg vm_name private_ip power_state; do
+      # Get network interface and vnet information
+      vnet_name="N/A"
+      nic_id=$(az vm show -g "$rg" -n "$vm_name" --query "networkProfile.networkInterfaces[0].id" -o tsv 2>/dev/null)
+      if [ "$nic_id" != "" ] && [ "$nic_id" != "null" ]; then
+        subnet_id=$(az network nic show --ids "$nic_id" --query "ipConfigurations[0].subnet.id" -o tsv 2>/dev/null)
+        if [ "$subnet_id" != "" ] && [ "$subnet_id" != "null" ]; then
+          vnet_name=$(echo "$subnet_id" | sed -n 's|.*/virtualNetworks/\([^/]*\)/.*|\1|p')
+        fi
+      fi
+
+      # Clean up power state
+      power_state=$(echo "$power_state" | sed 's/VM //')
+
+      # Store in array for formatting
+      printf "%-20s %-20s %-15s %-20s %-15s\n" "$rg" "$vm_name" "$private_ip" "$vnet_name" "$power_state"
+    done |
+    (
+      # Print header
+      echo "---------------------------------------------------------------------------------"
+      printf "%-20s %-20s %-15s %-20s %-15s\n" "resource_group" "vm_name" "private_ip" "vnet" "power_state"
+      # Print data
+      cat
+      echo "---------------------------------------------------------------------------------"
+    )
+}
+
+function vm_usage() {
+  echo "Usage: baz vm <command>"
+  echo ""
+  echo "Commands:"
+  echo "  list    List all virtual machines"
+}
+
+function vm_main() {
+  local subcommand="$1"
+  shift
+
+  case "$subcommand" in
+    list)
+      vm_list "$@"
+      ;;
+    *)
+      vm_usage
+      return 1
+      ;;
+  esac
+}

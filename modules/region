@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+# region module for baz
+
+function region_list() {
+  # List all available regions/locations
+  az account list-locations --query "[].{name:name, display_name:displayName, regional_display_name:regionalDisplayName}" -o json |
+    jq -r '.[] | "\(.name) \(.display_name) \(.regional_display_name)"' |
+    while read -r name display_name regional_display_name; do
+      # Format output
+      printf "%-20s %-30s %-40s\n" "$name" "$display_name" "$regional_display_name"
+    done |
+    (
+      # Print header
+      echo "---------------------------------------------------------------------------------------------"
+      printf "%-20s %-30s %-40s\n" "name" "display_name" "regional_display_name"
+      # Print data
+      cat
+      echo "---------------------------------------------------------------------------------------------"
+    )
+}
+
+function region_usage() {
+  echo "Usage: baz region <command>"
+  echo "Alias: baz reg <command>"
+  echo ""
+  echo "Commands:"
+  echo "  list    List all available Azure regions/locations"
+}
+
+function region_main() {
+  local subcommand="$1"
+  shift
+
+  case "$subcommand" in
+    list)
+      region_list "$@"
+      ;;
+    *)
+      region_usage
+      return 1
+      ;;
+  esac
+}

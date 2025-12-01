@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+# resource_group module for baz
+
+function resource_group_list() {
+  # List all resource groups with their details
+  az group list --query "[].{name:name, location:location, provisioning_state:properties.provisioningState}" -o json |
+    jq -r '.[] | "\(.name) \(.location) \(.provisioning_state)"' |
+    while read -r name location state; do
+      # Format output
+      printf "%-40s %-20s %-15s\n" "$name" "$location" "$state"
+    done |
+    (
+      # Print header
+      echo "--------------------------------------------------------------------------------------"
+      printf "%-40s %-20s %-15s\n" "name" "location" "state"
+      # Print data
+      cat
+      echo "--------------------------------------------------------------------------------------"
+    )
+}
+
+function resource_group_usage() {
+  echo "Usage: baz resource_group <command>"
+  echo "Alias: baz rg <command>"
+  echo ""
+  echo "Commands:"
+  echo "  list    List all resource groups"
+}
+
+function resource_group_main() {
+  local subcommand="$1"
+  shift
+
+  case "$subcommand" in
+    list)
+      resource_group_list "$@"
+      ;;
+    *)
+      resource_group_usage
+      return 1
+      ;;
+  esac
+}

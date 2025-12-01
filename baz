@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+
+# baz - Azure CLI extension for simple console functionality
+
+# Get the directory where this script is located (resolve symlinks)
+BAZ_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+MODULES_DIR="$BAZ_DIR/modules"
+
+# Check if az CLI is installed
+if ! command -v az &>/dev/null; then
+  echo "Error: Azure CLI (az) is not installed"
+  exit 1
+fi
+
+# Check if jq is installed
+if ! command -v jq &>/dev/null; then
+  echo "Error: jq is not installed"
+  exit 1
+fi
+
+# Check if user is logged in to Azure
+if ! az account show &>/dev/null; then
+  echo "Error: Not logged in to Azure. Please run 'az login' first"
+  exit 1
+fi
+
+# Available modules and their access methods
+declare -A MODULES
+MODULES[vnet]="azcli"
+MODULES[vm]="azcli"
+MODULES[subscription]="azcli"
+MODULES[defaults]="azcli"
+MODULES[resource_group]="azcli"
+MODULES[region]="azcli"
+MODULES[app_proxy]="graph_api"
+
+# Module aliases (short names)
+declare -A MODULE_ALIASES
+MODULE_ALIASES[sub]="subscription"
+MODULE_ALIASES[def]="defaults"
+MODULE_ALIASES[rg]="resource_group"
+MODULE_ALIASES[reg]="region"
+MODULE_ALIASES[ap]="app_proxy"
+
+# Load module function
+function load_module() {
+  local module_name="$1"
+  local module_file="$MODULES_DIR/$module_name"
+
+  if [ ! -f "$module_file" ]; then
+    echo "Error: Module '$module_name' not found"
+    return 1
+  fi
+
+  source "$module_file"
+}
+
+# Show usage
+function show_usage() {
+  echo "Usage: baz <module> <command> [options]"
+  echo ""
+  echo "Available modules:"
+  echo "  vnet                    Virtual network operations"
+  echo "  vm                      Virtual machine operations"
+  echo "  subscription (sub)      Subscription management"
+  echo "  defaults (def)          Default settings management"
+  echo "  resource_group (rg)     Resource group operations"
+  echo "  region (reg)            Region/location operations"
+  echo "  app_proxy (ap)          Application Proxy operations"
+  echo ""
+  echo "Use 'baz <module>' to see module-specific commands"
+}
+
+# Main entry point
+function main() {
+  local module="$1"
+  shift
+
+  if [ -z "$module" ]; then
+    show_usage
+    exit 1
+  fi
+
+  # Resolve module alias if exists
+  if [ -n "${MODULE_ALIASES[$module]}" ]; then
+    module="${MODULE_ALIASES[$module]}"
+  fi
+
+  # Check if module exists
+  if [ -z "${MODULES[$module]}" ]; then
+    echo "Error: Unknown module '$module'"
+    echo ""
+    show_usage
+    exit 1
+  fi
+
+  # Load and execute module
+  if load_module "$module"; then
+    # Call the module's main function
+    "${module}_main" "$@"
+  else
+    exit 1
+  fi
+}
+
+main "$@"

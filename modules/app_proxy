@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+
+# app_proxy module for baz
+
+function app_proxy_list_connector_groups() {
+	# List all Application Proxy Connector Groups using Graph API
+	#local response=$(az rest --method GET --url "https://graph.microsoft.com/v1.0/onPremisesPublishingProfiles/applicationProxy/connectorGroups" 2>/dev/null)
+	local response=$(az rest --method GET --output jsonc --url "https://graph.microsoft.com/beta/onPremisesPublishingProfiles/applicationProxy/connectorGroups" 2>/dev/null)
+
+	if [ $? -ne 0 ]; then
+		echo "Error: Failed to retrieve connector groups. Ensure you have proper permissions."
+		return 1
+	fi
+
+	echo "$response" | jq -r '.value[] | "\(.id) \(.name) \(.connectorGroupType // "default") \(.isDefault // false)"' |
+		while read -r id name type is_default; do
+			# Mark default group
+			default_mark=""
+			if [ "$is_default" = "true" ]; then
+				default_mark="*"
+			fi
+
+			# Format output
+			printf "%-1s %-40s %-30s %-15s\n" "$default_mark" "$id" "$name" "$type"
+		done |
+		(
+			# Print header
+			echo "---------------------------------------------------------------------------------------------"
+			printf "%-1s %-40s %-30s %-15s\n" "" "id" "name" "type"
+			# Print data
+			cat
+			echo "---------------------------------------------------------------------------------------------"
+			echo "* = default connector group"
+		)
+}
+
+function app_proxy_list_connectors() {
+	local group_id="$1"
+
+	if [ -z "$group_id" ]; then
+		echo "Error: Connector group ID required"
+		echo "Usage: baz app_proxy list-connectors --group-id <id>"
+		echo "       baz ap list-connectors --group-id <id>"
+		echo ""
+		echo "Use 'baz ap list-connector-groups' to see available groups"
+		return 1
+	fi
+
+	# Parse --group-id parameter
+	if [ "$group_id" = "--group-id" ]; then
+		group_id="$2"
+	fi
+
+	# List connectors in a specific connector group
+	local response=$(az rest --method GET --url "https://graph.microsoft.com/v1.0/onPremisesPublishingProfiles/applicationProxy/connectorGroups/$group_id/members" 2>/dev/null)
+
+	if [ $? -ne 0 ]; then
+		echo "Error: Failed to retrieve connectors for group ID: $group_id"
+		echo "Ensure the group ID is correct and you have proper permissions."
+		return 1
+	fi
+
+	echo "$response" | jq -r '.value[] | "\(.id) \(.machineName // "N/A") \(.status // "unknown") \(.version // "N/A")"' |
+		while read -r id machine_name status version; do
+			# Format output
+			printf "%-40s %-30s %-15s %-15s\n" "$id" "$machine_name" "$status" "$version"
+		done |
+		(
+			# Print header
+			echo "------------------------------------------------------------------------------------------------"
+			printf "%-40s %-30s %-15s %-15s\n" "id" "machine_name" "status" "version"
+			# Print data
+			cat
+			echo "------------------------------------------------------------------------------------------------"
+		)
+}
+
+function app_proxy_list_applications() {
+	local group_id="$1"
+
+	if [ -z "$group_id" ]; then
+		echo "Error: Connector group ID required"
+		echo "Usage: baz app_proxy list-applications --group-id <id>"
+		echo "       baz ap list-applications --group-id <id>"
+		echo ""
+		echo "Use 'baz ap list-connector-groups' to see available groups"
+		return 1
+	fi
+
+	# Parse --group-id parameter
+	if [ "$group_id" = "--group-id" ]; then
+		group_id="$2"
+	fi
+
+	# Get all applications with onPremisesPublishing property explicitly selected
+	# Using beta endpoint as onPremisesPublishing is better supported there
+	#local apps_response=$(az rest --method GET --headers "Content-Type=application/json" --url 'https://graph.microsoft.com/beta/applications?$select=id,displayName,appId,onPremisesPublishing' 2>/dev/null)
+	local apps_response=$(az rest --method GET --output jsonc --url "https://graph.microsoft.com/beta/onPremisesPublishingProfiles/applicationProxy/connectorGroups/${group_id}/applications" 2>/dev/null)
+
+	if [ $? -ne 0 ]; then
+		echo "Error: Failed to retrieve applications"
+		echo "Ensure you have proper permissions."
+		return 1
+	fi
+
+	# Extract application details from the response
+	# Since we're querying the connector group endpoint directly, we get only apps for this group
+	local filtered_apps=$(echo "$apps_response" | jq -r '
+		.value[] |
+		"\(.appId // "N/A")\t\(.displayName // "N/A")\t\(.web.homePageUrl // "N/A")\t\(.onPremisesPublishing.internalUrl // "N/A")"
+	' 2>/dev/null)
+
+	if [ -z "$filtered_apps" ]; then
+		echo "No applications found for connector group: $group_id"
+		echo ""
+		echo "Tip: Use 'baz ap list-connector-groups' to verify the connector group ID"
+		return 0
+	fi
+
+	# Format output
+	echo "$filtered_apps" |
+		while IFS=$'\t' read -r app_id display_name external_url internal_url; do
+			printf "%-40s %-35s %-50s %-50s\n" "$app_id" "$display_name" "$external_url" "$internal_url"
+		done |
+		(
+			# Print header
+			echo "-----------------------------------------------------------------------------------------------------------------------------------------"
+			printf "%-40s %-35s %-50s %-50s\n" "app_id" "name" "external_url" "internal_url"
+			# Print data
+			cat
+			echo "-----------------------------------------------------------------------------------------------------------------------------------------"
+		)
+}
+
+function app_proxy_usage() {
+	echo "Usage: baz app_proxy <command>"
+	echo "Alias: baz ap <command>"
+	echo ""
+	echo "Commands:"
+	echo "  list-connector-groups              List all Application Proxy connector groups"
+	echo "  list-connectors --group-id <id>    List connectors in a specific group"
+	echo "  list-applications --group-id <id>  List applications bound to a specific group"
+	echo ""
+	echo "Note: These commands require Microsoft Graph API permissions:"
+	echo "  - Directory.Read.All or Application.Read.All"
+}
+
+function app_proxy_main() {
+	local subcommand="$1"
+	shift
+
+	case "$subcommand" in
+	list-connector-groups)
+		app_proxy_list_connector_groups "$@"
+		;;
+	list-connectors)
+		app_proxy_list_connectors "$@"
+		;;
+	list-applications)
+		app_proxy_list_applications "$@"
+		;;
+	*)
+		app_proxy_usage
+		return 1
+		;;
+	esac
+}
