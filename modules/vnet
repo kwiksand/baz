@@ -3,6 +3,32 @@
 # vnet module for baz
 
 function vnet_list() {
+  local all_subscriptions=false
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all|-a)
+        all_subscriptions=true
+        shift
+        ;;
+      *)
+        echo "Error: Unknown option '$1'"
+        return 1
+        ;;
+    esac
+  done
+
+  if [ "$all_subscriptions" = true ]; then
+    # List VNets across all subscriptions
+    vnet_list_all_subscriptions
+  else
+    # List VNets in current subscription only
+    vnet_list_current_subscription
+  fi
+}
+
+function vnet_list_current_subscription() {
   # Get all resource groups and their vnets
   az network vnet list --query "[].{resource_group:resourceGroup, vnet_name:name, cidr_range:addressSpace.addressPrefixes[0], peerings:length(virtualNetworkPeerings)}" -o json |
     jq -r '.[] | "\(.resource_group) \(.vnet_name) \(.cidr_range) \(.peerings)"' |
@@ -26,11 +52,62 @@ function vnet_list() {
     )
 }
 
+function vnet_list_all_subscriptions() {
+  # Save current subscription
+  local current_sub=$(az account show --query id -o tsv)
+
+  # Get all subscriptions
+  local subscriptions=$(az account list --query "[].{id:id, name:name}" -o json)
+
+  # Collect all VNet data
+  local temp_data=$(mktemp)
+
+  echo "$subscriptions" | jq -r '.[] | "\(.id) \(.name)"' | while read -r sub_id sub_name; do
+    # Switch to subscription
+    az account set --subscription "$sub_id" 2>/dev/null
+
+    # Get VNets in this subscription
+    az network vnet list --query "[].{resource_group:resourceGroup, vnet_name:name, cidr_range:addressSpace.addressPrefixes[0], peerings:length(virtualNetworkPeerings)}" -o json 2>/dev/null |
+      jq -r --arg sub_name "$sub_name" '.[] | "\($sub_name) \(.resource_group) \(.vnet_name) \(.cidr_range) \(.peerings)"' >> "$temp_data"
+  done
+
+  # Restore original subscription
+  az account set --subscription "$current_sub" 2>/dev/null
+
+  # Format and display results
+  cat "$temp_data" |
+    while read -r sub rg vnet cidr peer_count; do
+      # Convert peer count to yes/no
+      peer_status="no"
+      if [ "$peer_count" -gt 0 ]; then
+        peer_status="yes"
+      fi
+
+      # Store in array for formatting
+      printf "%-30s %-20s %-20s %-20s %-5s\n" "$sub" "$rg" "$vnet" "$cidr" "$peer_status"
+    done |
+    (
+      # Print header
+      echo "---------------------------------------------------------------------------------------------------"
+      printf "%-30s %-20s %-20s %-20s %-5s\n" "subscription" "resource_group" "vnet_name" "cidr_range" "peer_connected"
+      # Print data
+      cat
+      echo "---------------------------------------------------------------------------------------------------"
+    )
+
+  # Clean up temp file
+  rm -f "$temp_data"
+}
+
 function vnet_usage() {
-  echo "Usage: baz vnet <command>"
+  echo "Usage: baz vnet <command> [options]"
   echo ""
   echo "Commands:"
-  echo "  list    List all virtual networks"
+  echo "  list [--all|-a]    List virtual networks"
+  echo ""
+  echo "Options:"
+  echo "  --all, -a          List VNets across all subscriptions in tenant"
+  echo "                     (default: current subscription only)"
 }
 
 function vnet_main() {

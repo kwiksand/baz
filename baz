@@ -28,6 +28,7 @@ fi
 declare -A MODULES
 MODULES[vnet]="azcli"
 MODULES[vm]="azcli"
+MODULES[dns]="azcli"
 MODULES[subscription]="azcli"
 MODULES[defaults]="azcli"
 MODULES[resource_group]="azcli"
@@ -62,6 +63,7 @@ function show_usage() {
   echo "Available modules:"
   echo "  vnet                    Virtual network operations"
   echo "  vm                      Virtual machine operations"
+  echo "  dns                     DNS zone operations"
   echo "  subscription (sub)      Subscription management"
   echo "  defaults (def)          Default settings management"
   echo "  resource_group (rg)     Resource group operations"

@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+
+# dns module for baz
+
+function dns_list() {
+  local all_subscriptions=false
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all|-a)
+        all_subscriptions=true
+        shift
+        ;;
+      *)
+        echo "Error: Unknown option '$1'"
+        return 1
+        ;;
+    esac
+  done
+
+  if [ "$all_subscriptions" = true ]; then
+    dns_list_all_subscriptions
+  else
+    dns_list_current_subscription
+  fi
+}
+
+function dns_list_current_subscription() {
+  az network dns zone list --query "[].{resource_group:resourceGroup, zone_name:name, records:numberOfRecordSets}" -o json |
+    jq -r '.[] | "\(.resource_group) \(.zone_name) \(.records)"' |
+    while read -r rg zone records; do
+      printf "%-30s %-40s %-10s\n" "$rg" "$zone" "$records"
+    done |
+    (
+      echo "--------------------------------------------------------------------------------"
+      printf "%-30s %-40s %-10s\n" "resource_group" "zone_name" "records"
+      cat
+      echo "--------------------------------------------------------------------------------"
+    )
+}
+
+function dns_list_all_subscriptions() {
+  local current_sub=$(az account show --query id -o tsv)
+  local subscriptions=$(az account list --query "[].{id:id, name:name}" -o json)
+  local temp_data=$(mktemp)
+
+  echo "$subscriptions" | jq -r '.[] | "\(.id) \(.name)"' | while read -r sub_id sub_name; do
+    az account set --subscription "$sub_id" 2>/dev/null
+    az network dns zone list --query "[].{resource_group:resourceGroup, zone_name:name, records:numberOfRecordSets}" -o json 2>/dev/null |
+      jq -r --arg sub_name "$sub_name" '.[] | "\($sub_name) \(.resource_group) \(.zone_name) \(.records)"' >> "$temp_data"
+  done
+
+  az account set --subscription "$current_sub" 2>/dev/null
+
+  cat "$temp_data" |
+    while read -r sub rg zone records; do
+      printf "%-30s %-30s %-40s %-10s\n" "$sub" "$rg" "$zone" "$records"
+    done |
+    (
+      echo "-----------------------------------------------------------------------------------------------------"
+      printf "%-30s %-30s %-40s %-10s\n" "subscription" "resource_group" "zone_name" "records"
+      cat
+      echo "-----------------------------------------------------------------------------------------------------"
+    )
+
+  rm -f "$temp_data"
+}
+
+function dns_trace_delegation() {
+  local zone_name="$1"
+  local resource_group="$2"
+
+  if [ -z "$zone_name" ]; then
+    echo "Error: Zone name is required"
+    echo "Usage: baz dns trace <zone_name> [resource_group]"
+    return 1
+  fi
+
+  # If resource group not provided, try to find it
+  if [ -z "$resource_group" ]; then
+    echo "Looking for DNS zone '$zone_name'..."
+    resource_group=$(az network dns zone list --query "[?name=='$zone_name'].resourceGroup | [0]" -o tsv)
+
+    if [ -z "$resource_group" ]; then
+      echo "Error: Could not find DNS zone '$zone_name' in current subscription"
+      return 1
+    fi
+    echo "Found in resource group: $resource_group"
+    echo ""
+  fi
+
+  # Check if dig is available
+  if ! command -v dig &>/dev/null; then
+    echo "Warning: 'dig' command not found. Install dnsutils/bind-tools for DNS queries."
+    echo "Showing Azure DNS zone information only..."
+    echo ""
+  fi
+
+  echo "==================================="
+  echo "DNS Zone: $zone_name"
+  echo "Resource Group: $resource_group"
+  echo "==================================="
+  echo ""
+
+  # Get NS records from Azure DNS
+  echo "--- NS Records in Azure DNS ---"
+  local ns_records=$(az network dns record-set ns list -g "$resource_group" -z "$zone_name" --query "[].{name:name, ttl:ttl, records:nsRecords[].nsdname}" -o json)
+
+  echo "$ns_records" | jq -r '.[] | "\(.name) \(.ttl) \(.records | join(", "))"' | while read -r name ttl nameservers; do
+    printf "%-30s TTL: %-6s NS: %s\n" "$name" "$ttl" "$nameservers"
+  done
+  echo ""
+
+  # For each NS record (delegation), query the target DNS server
+  if command -v dig &>/dev/null; then
+    echo "--- Querying Delegated DNS Servers ---"
+    echo ""
+
+    echo "$ns_records" | jq -c '.[]' | while read -r ns_record; do
+      local subdomain=$(echo "$ns_record" | jq -r '.name')
+      local nameservers=$(echo "$ns_record" | jq -r '.records[]')
+
+      # Skip @ (root) record as it's the zone itself
+      if [ "$subdomain" = "@" ]; then
+        continue
+      fi
+
+      # Construct full domain name
+      local full_domain="${subdomain}.${zone_name}"
+
+      echo "Delegation: $full_domain"
+      echo "Nameservers:"
+      echo "$nameservers" | while read -r ns; do
+        echo "  - $ns"
+      done
+      echo ""
+
+      # Query the first nameserver for records in the delegated zone
+      local first_ns=$(echo "$nameservers" | head -1)
+      echo "Querying $first_ns for records in $full_domain:"
+      echo ""
+
+      # Try to get SOA record
+      echo "  SOA Record:"
+      dig @"$first_ns" "$full_domain" SOA +short 2>/dev/null | sed 's/^/    /'
+      echo ""
+
+      # Try to get all records (AXFR - may fail if zone transfer is restricted)
+      echo "  Attempting zone transfer (may be restricted):"
+      local axfr_result=$(dig @"$first_ns" "$full_domain" AXFR +short 2>/dev/null)
+      if [ -n "$axfr_result" ]; then
+        echo "$axfr_result" | head -20 | sed 's/^/    /'
+        local line_count=$(echo "$axfr_result" | wc -l)
+        if [ "$line_count" -gt 20 ]; then
+          echo "    ... (showing first 20 of $line_count records)"
+        fi
+      else
+        echo "    Zone transfer not allowed or no records found"
+        echo ""
+        echo "  Trying common record types:"
+        for record_type in A AAAA CNAME MX TXT; do
+          local result=$(dig @"$first_ns" "$full_domain" "$record_type" +short 2>/dev/null)
+          if [ -n "$result" ]; then
+            echo "    $record_type:"
+            echo "$result" | sed 's/^/      /'
+          fi
+        done
+      fi
+      echo ""
+      echo "---"
+      echo ""
+    done
+  fi
+
+  # Show all other record types in the Azure DNS zone
+  echo "--- All Record Types in Azure DNS Zone ---"
+  echo ""
+  for record_type in A AAAA CNAME MX TXT SRV PTR; do
+    local records=$(az network dns record-set "$record_type" list -g "$resource_group" -z "$zone_name" --query "[].name" -o tsv 2>/dev/null)
+    if [ -n "$records" ]; then
+      local count=$(echo "$records" | wc -l)
+      echo "$record_type records: $count"
+      echo "$records" | sed 's/^/  /' | head -10
+      if [ "$count" -gt 10 ]; then
+        echo "  ... (showing first 10 of $count records)"
+      fi
+      echo ""
+    fi
+  done
+}
+
+function dns_usage() {
+  echo "Usage: baz dns <command> [options]"
+  echo ""
+  echo "Commands:"
+  echo "  list [--all|-a]              List DNS zones"
+  echo "  trace <zone> [resource_group] Trace DNS zone delegation"
+  echo ""
+  echo "Options:"
+  echo "  --all, -a                    List across all subscriptions"
+  echo ""
+  echo "Examples:"
+  echo "  baz dns list                 List DNS zones in current subscription"
+  echo "  baz dns list --all           List DNS zones in all subscriptions"
+  echo "  baz dns trace example.com    Trace delegations for example.com"
+  echo "  baz dns trace example.com MyRG  Trace with specific resource group"
+}
+
+function dns_main() {
+  local subcommand="$1"
+  shift
+
+  case "$subcommand" in
+    list)
+      dns_list "$@"
+      ;;
+    trace)
+      dns_trace_delegation "$@"
+      ;;
+    *)
+      dns_usage
+      return 1
+      ;;
+  esac
+}
